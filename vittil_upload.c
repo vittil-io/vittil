@@ -255,6 +255,19 @@ esp_err_t vittil_upload_init(void)
     vittil_upload.reset = esp_reset_reason();
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
     vittil_upload.have_dump = (esp_core_dump_image_check() == ESP_OK);
+    if (!vittil_upload.have_dump) {
+        /* the stock writer only writes into a blank partition (the no-overwrite
+         * option): anything else in it that is not a whole dump (another
+         * firmware's data, a write cut by a power loss) would keep every later
+         * crash from writing one, so it is erased */
+        const esp_partition_t *p =
+            esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+        uint32_t first = UINT32_MAX;
+        if (p && esp_partition_read(p, 0, &first, sizeof(first)) == ESP_OK && first != UINT32_MAX) {
+            esp_err_t e = esp_core_dump_image_erase();
+            ESP_LOGW(TAG, "coredump partition held no whole dump: erased (%s)", esp_err_to_name(e));
+        }
+    }
 #else
     vittil_upload.have_dump = false;
 #endif
