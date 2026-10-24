@@ -23,6 +23,10 @@
  *   - IRAM and DRAM only: no flash, no allocation, no lock, no log; every
  *     IDF call it makes is inline, in ROM (the CRC), or checked at run time
  *     to sit in IRAM (the two FreeRTOS calls for the task's name);
+ *   - no call that masks interrupts: its restore runs at the masking
+ *     level, under a high-level interrupt's panic (the interrupt watchdog's
+ *     is level 4), and the watchdog's pending interrupt would enter the
+ *     panic again before the summary is whole;
  *   - every pointer range-checked before it is read (the frame, each stack
  *     word the walk reads, the abort line, the task's control block, the
  *     log ring);
@@ -134,16 +138,16 @@ static IRAM_ATTR bool in_iram(const void *fn)
     return esp_ptr_in_iram(fn);
 }
 
-static IRAM_ATTR void fill_task(vittil_summary_t *s)
+/* The crashed core's current task, read without masking interrupts (the
+ * scheduler-state and current-task calls both mask them); before the
+ * scheduler starts it is the task being created, or NULL. */
+static IRAM_ATTR void fill_task(vittil_summary_t *s, int core)
 {
-    if (!in_iram((const void *)xTaskGetSchedulerState) || !in_iram((const void *)xTaskGetCurrentTaskHandle) ||
-        !in_iram((const void *)pcTaskGetName)) {
+    if (!in_iram((const void *)xTaskGetCurrentTaskHandleForCore) || !in_iram((const void *)pcTaskGetName) ||
+        core < 0 || core >= portNUM_PROCESSORS) {
         return;
     }
-    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
-        return;
-    }
-    TaskHandle_t h = xTaskGetCurrentTaskHandle();
+    TaskHandle_t h = xTaskGetCurrentTaskHandleForCore(core);
     if (!h || !dram_range((uint32_t)h, sizeof(void *) * 4)) {
         return; /* a wild handle is never followed */
     }
@@ -288,6 +292,14 @@ static IRAM_ATTR void fill(const panic_info_t *info)
     if (g_panic_abort) {
         s->exception = PANIC_EXCEPTION_ABORT;
         copy_dram_str(s->detail, sizeof(s->detail), g_panic_abort_details);
+#if CONFIG_ESP_TASK_WDT_EN
+        /* the task watchdog set to panic stops the starved task as an abort
+         * with no line (task_wdt.c), and marks it */
+        extern bool g_twdt_isr;
+        if (g_twdt_isr) {
+            s->exception = PANIC_EXCEPTION_TWDT;
+        }
+#endif
     }
     /* the uptime from the timer only when the build placed it in IRAM
      * (CONFIG_ESP_TIMER_IN_IRAM, the default); kept as two words, no
@@ -297,7 +309,7 @@ static IRAM_ATTR void fill(const panic_info_t *info)
         s->uptime_us[0] = (uint32_t)us;
         s->uptime_us[1] = (uint32_t)(us >> 32);
     }
-    fill_task(s);
+    fill_task(s, info->core);
     fill_regs(s, (uint32_t)info->frame);
     fill_log(s);
 
