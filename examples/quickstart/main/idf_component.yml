@@ -1,0 +1,4 @@
+dependencies:
+  vittil-io/vittil:
+    version: "*"
+    override_path: "../../../"

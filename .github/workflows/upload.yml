@@ -1,0 +1,30 @@
+name: Upload
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag matches the manifest's version
+        if: github.event_name == 'push'
+        run: |
+          manifest="v$(sed -n 's/^version: "\(.*\)"$/\1/p' idf_component.yml)"
+          if [ "$manifest" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, idf_component.yml $manifest"
+            exit 1
+          fi
+      - name: Upload to the ESP Component Registry
+        uses: espressif/upload-components-ci-action@v2.2.1
+        with:
+          components: "vittil:."
+          namespace: vittil-io
+          dry_run: ${{ github.event_name == 'workflow_dispatch' }}

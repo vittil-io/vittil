@@ -1,0 +1,142 @@
+menu "Vittil"
+
+    config VITTIL_PROJECT_KEY
+        string "Project key"
+        default "$(VITTIL_PROJECT_KEY)"
+        help
+            Your project's key, from Settings in the Vittil app: "ecr_" and
+            43 characters. Every crash and ping is sent with it. Empty by
+            default, or taken from the VITTIL_PROJECT_KEY environment
+            variable when the build first creates sdkconfig (for a CI).
+            The key can only send crashes and pings into its own project;
+            it is never written to the log.
+
+    # Turned on by the coredump line, CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y:
+    # the dump's own stack, the first crash of a crash loop kept in flash
+    # until it is uploaded, and with vittil's writer the variables (.data and
+    # .bss; the writer fits them to the partition, the stock writer would
+    # write nothing once they outgrow it).
+    config VITTIL_COREDUMP_DEFAULTS
+        bool
+        default y
+        select ESP_COREDUMP_USE_STACK_SIZE if ESP_COREDUMP_ENABLE_TO_FLASH
+        select ESP_COREDUMP_FLASH_NO_OVERWRITE if ESP_COREDUMP_ENABLE_TO_FLASH
+        select ESP_COREDUMP_CAPTURE_DRAM if VITTIL_WRITER
+
+    menu "Advanced"
+
+    config VITTIL_PING_INTERVAL_S
+        int "Ping interval, in seconds"
+        range 60 86400
+        default 1800
+        help
+            The device says who it is this often; the dashboard shows it
+            Live, and Offline after a day of silence. The first ping is at
+            boot.
+
+    config VITTIL_LOG_RING_BYTES
+        int "Log ring, bytes of the latest log lines kept for the dump"
+        range 256 16384
+        default 2048
+        help
+            Every ESP_LOGx line goes to the console as before and a copy
+            into this ring (in the SDK's record, which the dump stores). The
+            crash arrives with the last lines before it. Reserved at boot in
+            the coredump's own DRAM section; a line longer than
+            160 bytes is cut. 2048 holds about 25 lines.
+
+    config VITTIL_WRITER
+        bool "Fit the dump to the coredump partition instead of writing nothing"
+        default y
+        depends on ESP_COREDUMP_ENABLE_TO_FLASH && ESP_COREDUMP_DATA_FORMAT_ELF
+        help
+            The stock writer writes no dump at all when it is larger than the
+            coredump partition. With this on, vittil's writer (the stock ELF
+            writer with a fit pass) also writes the variables (.data and .bss,
+            ESP_COREDUMP_CAPTURE_DRAM turned on with it; the heap is not
+            written) and cuts regions in a fixed order until the dump fits:
+            the variables first, .bss then .data, each cut from its high end;
+            the other tasks' stacks shortened in steps and then dropped, the
+            other tasks' registers and control blocks; the crashed task's registers,
+            control block and stack and the SDK's record (the facts and the
+            log lines) are never cut. What was left out is written in a note
+            the server reads, so the Issue page says so. A dump that fits is
+            written whole. At boot vittil_start's line says when the partition
+            is missing, and one warning when it is too small for the floor.
+
+    config VITTIL_SUMMARY
+        bool "Crash summaries when there is no coredump (devices already in the field)"
+        default y
+        help
+            An OTA update never changes the partition table, so a device
+            shipped without a coredump partition can never store a dump.
+            With this on, a hook in front of ESP-IDF's panic handler keeps a
+            crash summary (the cause, the fault address, the registers, the
+            backtrace, the task, the abort line, the build, the last log
+            lines) in memory a reboot does not clear (RTC memory, or noinit
+            RAM on a chip without it): 576 bytes on Xtensa (1,648 on RISC-V)
+            plus VITTIL_SUMMARY_LOG_BYTES. The next boot sends it when no
+            dump is staged, and clears it once the server has it; a summary
+            that is not whole (a power-on, a cut write) is refused by its
+            CRC32 and zeroed. Lost only if the power goes before the upload.
+
+    config VITTIL_SUMMARY_LOG_BYTES
+        int "Crash summary: bytes of the latest log lines kept in it (0: none)"
+        range 0 2048
+        default 512
+        depends on VITTIL_SUMMARY
+        help
+            The newest bytes of the log ring (VITTIL_LOG_RING_BYTES) copied
+            into the crash summary at the crash, so a device with no
+            coredump partition still sends the lines before it. 512 holds
+            about six lines of 80 bytes; the oldest line may be cut at its
+            start. Each byte is a byte of RTC memory (noinit RAM on a chip
+            without it): the summary is 1,088 bytes on Xtensa with 512, 576
+            with 0. At most VITTIL_LOG_RING_BYTES (checked at compile time).
+
+    config VITTIL_ELF_UPLOAD
+        bool "Upload the ELF to Vittil at every build"
+        default y
+        help
+            After the link, the build sends build/<project>.elf to Vittil
+            with the project key, so the crashes of that build are decoded
+            without an upload by hand. Once per new ELF: a build that does
+            not change the ELF sends nothing. When the upload cannot be made
+            (no network, the server down, a refused key) the build goes on
+            and prints nothing; the next build tries again.
+
+    config VITTIL_DEV_OPTIONS
+        bool "Development options (Vittil's own testing)"
+        default n
+        help
+            Shows the server URL, the TLS bundle switch and the emulator
+            transport, which Vittil's own tests set. Leave it off: with it
+            off they keep their defaults.
+
+    config VITTIL_SERVER_URL
+        string "Vittil server base URL (no trailing slash)" if VITTIL_DEV_OPTIONS
+        default "http://10.0.2.2:8080" if VITTIL_QEMU_ETH
+        default "https://app.vittil.io"
+        help
+            The device POSTs to <url>/api/crashes and <url>/api/ping.
+            In a QEMU build the host is reachable at 10.0.2.2.
+
+    config VITTIL_TLS_CERT_BUNDLE
+        bool "https: verify the server with ESP-IDF's root certificate bundle" if VITTIL_DEV_OPTIONS
+        default y
+        depends on MBEDTLS_CERTIFICATE_BUNDLE
+        help
+            Needed for an https:// server URL. Off only for an http server
+            in a test.
+
+    config VITTIL_QEMU_ETH
+        bool "Emulator transport: bring up QEMU's OpenCores Ethernet (no Wi-Fi in QEMU)" if VITTIL_DEV_OPTIONS
+        default n
+        select ETH_USE_OPENETH
+        help
+            Emulator builds only: vittil brings the emulated Ethernet up
+            with DHCP itself before uploading.
+
+    endmenu
+
+endmenu

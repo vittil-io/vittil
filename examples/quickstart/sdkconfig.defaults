@@ -1,0 +1,7 @@
+# Quickstart step 2. Your project key is on Settings in the Vittil app.
+CONFIG_VITTIL_PROJECT_KEY=""
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# Your Wi-Fi network, for example_connect().
+CONFIG_EXAMPLE_WIFI_SSID=""
+CONFIG_EXAMPLE_WIFI_PASSWORD=""

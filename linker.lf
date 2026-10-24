@@ -1,0 +1,11 @@
+# The record's fill and the writer run inside the panic handler. When the
+# application asks for the panic handler in IRAM, the stock coredump writer
+# goes there; so do ours (the log hook rides along with the record's file).
+[mapping:vittil]
+archive: libvittil.a
+entries:
+    if ESP_PANIC_HANDLER_IRAM = y:
+        vittil_writer (noflash)
+        vittil_record (noflash)
+    else:
+        * (default)

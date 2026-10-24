@@ -1,0 +1,30 @@
+version: "0.1.2"
+description: "Vittil: crash reports from ESP32 devices in the field. Uploads each crash's coredump (or a crash summary when the device has no coredump partition) to Vittil, which decodes it against the build's ELF."
+url: "https://vittil.io"
+repository: "https://github.com/vittil-io/vittil.git"
+license: "Apache-2.0"
+tags:
+  - coredump
+  - crash
+  - crash-reporting
+  - observability
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c2
+  - esp32c3
+  - esp32c5
+  - esp32c6
+  - esp32c61
+  - esp32h2
+  - esp32p4
+dependencies:
+  idf: ">=5.5"
+files:
+  exclude:
+    - "**/build/**"
+    - "**/managed_components/**"
+    - "**/sdkconfig"
+    - "**/sdkconfig.old"
+    - "**/dependencies.lock"
