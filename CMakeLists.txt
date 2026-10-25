@@ -1,7 +1,10 @@
 # vittil, the device SDK of Vittil.
 #
 # The files: vittil.c the task and vittil_start(); vittil_transport.c the
-# HTTP client; vittil_ping.c the identity, the ping and the retry;
+# transport (ESP-IDF's HTTP client, or the application's three functions
+# with CONFIG_VITTIL_TRANSPORT_APP, in which case nothing of esp_http_client
+# is referenced and the linker leaves it and its TLS out, the requirement
+# below notwithstanding: a requirement is a build, not a link); vittil_ping.c the identity, the ping and the retry;
 # vittil_upload.c the boot facts, the staged dump streamed from the coredump
 # partition, the no-dump event; vittil_record.c the record and the log ring,
 # the wrap of the coredump entry; vittil_writer.c the ELF writer with the

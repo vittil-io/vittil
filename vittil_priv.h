@@ -60,12 +60,21 @@ esp_err_t vittil_post_small(const char *path, const char *body, const char *what
  * included (ESP_FAIL, no answer read). One end per successful begin; the
  * caller never frees. One task at a time. */
 typedef struct {
-    void *c;     /* the esp_http_client handle; NULL between end and the next begin */
+    void *c;     /* the request's handle (esp_http_client's, or the application's); NULL between end and the next begin */
     size_t left; /* bytes of the body still to write */
 } vittil_post_t;
 esp_err_t vittil_post_begin(const char *path, size_t len, const char *what, vittil_post_t *p);
 esp_err_t vittil_post_write(vittil_post_t *p, const void *data, size_t len);
 esp_err_t vittil_post_end(vittil_post_t *p, const char *what, int *status);
+
+#if CONFIG_VITTIL_TRANSPORT_APP
+/* The application's transport (vittil_set_transport in vittil.h checks
+ * the struct and the start, then hands it here): copy it; whether one has
+ * been copied, which vittil_start requires. */
+struct vittil_transport_s;
+void vittil_transport_set_app(const struct vittil_transport_s *t);
+bool vittil_transport_app_set(void);
+#endif
 
 /* The ping (vittil_ping.c); the task that calls it is vittil.c. */
 

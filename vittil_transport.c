@@ -6,6 +6,12 @@
  * status handed back for the retry, and the streamed body (begin, write,
  * end; post_small is the three in a row). The caller's loop waits for the
  * network; nothing here blocks on it.
+ * Two transports, one built: ESP-IDF's HTTP client over https (the
+ * default, CONFIG_VITTIL_TRANSPORT_IDF), or the application's three
+ * functions (CONFIG_VITTIL_TRANSPORT_APP, vittil_set_transport in
+ * vittil.h), in which case nothing of esp_http_client is referenced here
+ * and the linker leaves it out. The URL, the key header, the refused key,
+ * the status and the checks are the same either way.
  * Every entry point checks its arguments and refuses with one log line.
  */
 #include <string.h>
@@ -15,10 +21,14 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_http_client.h"
 #include "esp_netif.h"
+#if CONFIG_VITTIL_TRANSPORT_APP
+#include "vittil.h"
+#else
+#include "esp_http_client.h"
 #if CONFIG_VITTIL_TLS_CERT_BUNDLE
 #include "esp_crt_bundle.h"
+#endif
 #endif
 
 #include "vittil_priv.h"
@@ -39,6 +49,12 @@ static struct {
     bool key_refused;
     /* the request's URL, built per request */
     char url[160];
+#if CONFIG_VITTIL_TRANSPORT_APP
+    /* the application's three functions, copied by vittil_set_transport
+     * (vittil.c checks them and the start); none until it is called */
+    vittil_transport_t app;
+    bool app_set;
+#endif
 } vittil_transport;
 
 void vittil_transport_set_key(const char *key)
@@ -59,6 +75,105 @@ bool vittil_transport_has_key(void)
     return vittil_transport.auth[0] != 0;
 }
 
+/* The request's URL, CONFIG_VITTIL_SERVER_URL + path, into the file's
+ * buffer. ESP_ERR_INVALID_ARG for a NULL path, a path not starting with /
+ * or a URL over 160 bytes (our own bug, logged, not retried). */
+static esp_err_t url_for(const char *path)
+{
+    if (!path || path[0] != '/') {
+        ESP_LOGE(TAG, "bad path (NULL or not starting with /)");
+        return ESP_ERR_INVALID_ARG;
+    }
+    int n = snprintf(vittil_transport.url, sizeof(vittil_transport.url), "%s%s", CONFIG_VITTIL_SERVER_URL, path);
+    if (n < 0 || n >= (int)sizeof(vittil_transport.url)) {
+        ESP_LOGE(TAG, "URL too long (%d), not sent", n);
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+/* The status line for the log: a 2xx at debug (the caller logs what it
+ * meant: the upload, the summary, the no-dump event, the ping's first of
+ * the boot, so the ping every interval is not a line each time); any
+ * other answer a warning with the server's words; -1 when none came. */
+static void log_status(const char *what, int status, const char *resp)
+{
+    if (status < 0) {
+        ESP_LOGW(TAG, "%s: no response from %s", what, CONFIG_VITTIL_SERVER_URL);
+    } else if (status >= 200 && status < 300) {
+        ESP_LOGD(TAG, "%s: HTTP %d %s", what, status, resp);
+    } else {
+        ESP_LOGW(TAG, "%s: HTTP %d %s", what, status, resp);
+    }
+}
+
+#if CONFIG_VITTIL_TRANSPORT_APP
+
+/* The application's transport. The four steps below are what begin,
+ * write and end call; the handle is the application's. */
+
+void vittil_transport_set_app(const vittil_transport_t *t)
+{
+    vittil_transport.app = *t;
+    vittil_transport.app_set = true;
+}
+
+bool vittil_transport_app_set(void)
+{
+    return vittil_transport.app_set;
+}
+
+/* Open the request through the application's begin: the URL, the key
+ * header or NULL, the body's length. Its error is handed up (the round
+ * retries it); a begin that says ESP_OK and leaves no handle is refused as
+ * ESP_FAIL, so a NULL never reaches write. */
+static esp_err_t open_request(const char *path, size_t len, const char *what, void **handle)
+{
+    *handle = NULL;
+    esp_err_t err = url_for(path);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const char *auth = vittil_transport.auth[0] ? vittil_transport.auth : NULL;
+    void *h = NULL;
+    err = vittil_transport.app.begin(vittil_transport.url, auth, len, &h);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s: connect failed: %s", what, esp_err_to_name(err));
+        return err;
+    }
+    if (!h) {
+        ESP_LOGW(TAG, "%s: the application's transport opened no handle, not sent", what);
+        return ESP_FAIL;
+    }
+    *handle = h;
+    return ESP_OK;
+}
+
+static esp_err_t write_request(void *handle, const void *data, size_t len)
+{
+    return vittil_transport.app.write(handle, data, len) == ESP_OK ? ESP_OK : ESP_FAIL;
+}
+
+/* Free a request whose body stayed short: end with whole false, its
+ * status ignored. */
+static void drop_request(void *handle)
+{
+    (void)vittil_transport.app.end(handle, false);
+}
+
+/* Finish a whole request: end with whole true gives the status, or -1. */
+static int finish_request(void *handle, const char *what)
+{
+    int status = vittil_transport.app.end(handle, true);
+    if (status < -1) {
+        status = -1;
+    }
+    log_status(what, status, "");
+    return status;
+}
+
+#else /* CONFIG_VITTIL_TRANSPORT_IDF */
+
 /* One client handle per request, POST, 15 s, JSON. ESP_ERR_INVALID_ARG
  * for a bad path or URL (our own bug, not retried); ESP_ERR_NO_MEM when the
  * client or a header could not be allocated (retried by the caller). A
@@ -68,14 +183,9 @@ static esp_err_t client_for(const char *path, esp_http_client_handle_t *out)
 {
     char *url = vittil_transport.url;
     *out = NULL;
-    if (!path || path[0] != '/') {
-        ESP_LOGE(TAG, "bad path (NULL or not starting with /)");
-        return ESP_ERR_INVALID_ARG;
-    }
-    int n = snprintf(url, sizeof(vittil_transport.url), "%s%s", CONFIG_VITTIL_SERVER_URL, path);
-    if (n < 0 || n >= (int)sizeof(vittil_transport.url)) {
-        ESP_LOGE(TAG, "URL too long (%d), not sent", n);
-        return ESP_ERR_INVALID_ARG;
+    esp_err_t err = url_for(path);
+    if (err != ESP_OK) {
+        return err;
     }
     esp_http_client_config_t cfg = {
         .url = url,
@@ -98,7 +208,7 @@ static esp_err_t client_for(const char *path, esp_http_client_handle_t *out)
         ESP_LOGW(TAG, "no memory for the http client, not sent");
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = esp_http_client_set_header(c, "Content-Type", "application/json");
+    err = esp_http_client_set_header(c, "Content-Type", "application/json");
     if (err == ESP_OK && vittil_transport.auth[0]) {
         err = esp_http_client_set_header(c, "Authorization", vittil_transport.auth);
     }
@@ -111,34 +221,61 @@ static esp_err_t client_for(const char *path, esp_http_client_handle_t *out)
     return ESP_OK;
 }
 
-/* Finish a request: headers, status, a short response for the log.
- * -1 when no answer came. A 2xx at debug: the caller logs what it meant
- * (the upload, the summary, the no-dump event, the ping's first of the
- * boot), so the ping every interval is not a line each time; any other
- * answer a warning with the server's words. */
-static int finish(esp_http_client_handle_t c, const char *what)
+/* Open the request: the client for the path, then the connection with
+ * len as the Content-Length. client_for's errors, or the open's (connect,
+ * timeout), which the round retries; the client freed on every failure. */
+static esp_err_t open_request(const char *path, size_t len, const char *what, void **handle)
 {
+    *handle = NULL;
+    esp_http_client_handle_t c = NULL;
+    esp_err_t err = client_for(path, &c);
+    if (err != ESP_OK) {
+        return err; /* INVALID_ARG (logged, our bug) or NO_MEM (retried) */
+    }
+    err = esp_http_client_open(c, (int)len);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s: connect failed: %s", what, esp_err_to_name(err));
+        esp_http_client_cleanup(c);
+        return err;
+    }
+    *handle = c;
+    return ESP_OK;
+}
+
+static esp_err_t write_request(void *handle, const void *data, size_t len)
+{
+    return esp_http_client_write((esp_http_client_handle_t)handle, data, (int)len) == (int)len ? ESP_OK : ESP_FAIL;
+}
+
+/* Free a request whose body stayed short, without reading an answer the
+ * server would never give. */
+static void drop_request(void *handle)
+{
+    esp_http_client_cleanup((esp_http_client_handle_t)handle);
+}
+
+/* Finish a request: headers, status, a short response for the log; -1
+ * when no answer came; the handle closed and freed on both branches. */
+static int finish_request(void *handle, const char *what)
+{
+    esp_http_client_handle_t c = (esp_http_client_handle_t)handle;
     int status = -1;
+    char resp[128] = "";
     if (esp_http_client_fetch_headers(c) >= 0) {
         status = esp_http_client_get_status_code(c);
-        char resp[128];
         int n = esp_http_client_read_response(c, resp, sizeof(resp) - 1);
         if (n < 0) {
             n = 0;
         }
         resp[n] = 0;
-        if (status >= 200 && status < 300) {
-            ESP_LOGD(TAG, "%s: HTTP %d %s", what, status, resp);
-        } else {
-            ESP_LOGW(TAG, "%s: HTTP %d %s", what, status, resp);
-        }
-    } else {
-        ESP_LOGW(TAG, "%s: no response from %s", what, CONFIG_VITTIL_SERVER_URL);
     }
+    log_status(what, status, resp);
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
     return status;
 }
+
+#endif /* the transport */
 
 /* A body of known length, written in pieces. begin opens the
  * connection with len as the Content-Length; write sends one piece; end
@@ -172,16 +309,10 @@ esp_err_t vittil_post_begin(const char *path, size_t len, const char *what, vitt
          * try again (the round). */
         return ESP_ERR_INVALID_STATE;
     }
-    esp_http_client_handle_t c = NULL;
-    esp_err_t err = client_for(path, &c);
+    void *c = NULL;
+    esp_err_t err = open_request(path, len, what, &c);
     if (err != ESP_OK) {
-        return err; /* INVALID_ARG (logged, our bug) or NO_MEM (retried) */
-    }
-    err = esp_http_client_open(c, (int)len);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "%s: connect failed: %s", what, esp_err_to_name(err));
-        esp_http_client_cleanup(c);
-        return err;
+        return err; /* INVALID_ARG (logged, our bug), NO_MEM or the connect error (retried) */
     }
     p->c = c;
     p->left = len;
@@ -201,7 +332,7 @@ esp_err_t vittil_post_write(vittil_post_t *p, const void *data, size_t len)
     if (len == 0) {
         return ESP_OK;
     }
-    if (esp_http_client_write(p->c, data, (int)len) != (int)len) {
+    if (write_request(p->c, data, len) != ESP_OK) {
         return ESP_FAIL; /* the caller's end sees the body short and frees */
     }
     p->left -= len;
@@ -217,16 +348,16 @@ esp_err_t vittil_post_end(vittil_post_t *p, const char *what, int *status)
         ESP_LOGE(TAG, "post_end: NULL post or name");
         return ESP_ERR_INVALID_ARG;
     }
-    esp_http_client_handle_t c = p->c;
+    void *c = p->c;
     p->c = NULL;
     if (p->left) {
         /* a body short of its Content-Length: the server would wait for
          * the rest; closed without an answer */
         ESP_LOGW(TAG, "%s: body short by %u bytes, not finished", what, (unsigned)p->left);
-        esp_http_client_cleanup(c);
+        drop_request(c);
         return ESP_FAIL;
     }
-    int st = finish(c, what);
+    int st = finish_request(c, what);
     if (status) {
         *status = st;
     }

@@ -256,6 +256,49 @@ Under Advanced, each with its help in menuconfig:
     CONFIG_VITTIL_WRITER             y      fit the dump to the partition, with the variables
     CONFIG_VITTIL_SUMMARY            y      a crash summary when there is no coredump
     CONFIG_VITTIL_SUMMARY_LOG_BYTES  512    log kept in a crash summary, about six lines
+    CONFIG_VITTIL_TRANSPORT_APP      n      send through the application's own transport
+
+### Transport
+
+By default Vittil sends through ESP-IDF's HTTP client over HTTPS. An
+application that already uses it shares the whole stack with Vittil. One
+that has no HTTPS of its own links ESP-IDF's HTTP client, TLS and root
+certificate bundle for Vittil, which is most of the flash Vittil appears to
+cost on such a build.
+
+An application that has an HTTP path of its own (its own client, its own
+certificates) can carry Vittil's requests instead. Set
+`CONFIG_VITTIL_TRANSPORT_APP=y` and register three functions before
+`vittil_start()`; ESP-IDF's HTTP client is then not linked for Vittil:
+
+```c
+#include "vittil.h"
+
+/* Open a POST of len bytes to url, with the headers
+ * Content-Type: application/json and Authorization: auth (NULL: no header).
+ * Return the connect error; Vittil logs and retries it. */
+static esp_err_t my_begin(const char *url, const char *auth, size_t len, void **handle);
+/* Send one piece of the body; ESP_FAIL when the connection dropped it. */
+static esp_err_t my_write(void *handle, const void *data, size_t len);
+/* Finish and free the handle on every path. whole: the body went entirely,
+ * read the answer and return its HTTP status (-1 when none came).
+ * Not whole: the body is short, free without reading and return -1. */
+static int my_end(void *handle, bool whole);
+
+static const vittil_transport_t my_transport = { my_begin, my_write, my_end };
+
+void app_main(void)
+{
+    vittil_set_transport(&my_transport);
+    vittil_start();
+}
+```
+
+Vittil calls them from its own task, one request at a time: a ping's body
+is under 200 bytes, a coredump's up to the partition's size, written in
+pieces of 3,072 bytes. `vittil_start()` refuses to start until a transport
+is registered. The URL is `https://app.vittil.io/api/...`; the transport
+verifies the server itself.
 
 ## Log lines
 
@@ -292,6 +335,12 @@ Measured on the quickstart example, ESP-IDF 5.5.5, esp32:
 - Heap: the HTTP client and TLS while a request is open, and 7.2 KB more
   during an upload; all of it freed when the request ends.
 - Network: one ping every 30 minutes; one upload per crash.
+
+These are Vittil's own bytes. On an application with no HTTPS of its own,
+ESP-IDF's HTTP client, TLS and root certificate bundle are linked for
+Vittil as well, about 200 KB of flash; an application that already uses
+HTTPS shares them, and one with its own HTTP path can carry Vittil's
+requests itself (see [Transport](#transport)).
 
 ## License
 

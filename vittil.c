@@ -33,6 +33,28 @@ static struct {
     bool started;
 } vittil_sdk;
 
+/* The application's transport, checked here (the struct, the start) and
+ * kept by the transport. */
+esp_err_t vittil_set_transport(const vittil_transport_t *t)
+{
+#if CONFIG_VITTIL_TRANSPORT_APP
+    if (!t || !t->begin || !t->write || !t->end) {
+        ESP_LOGE(TAG, "vittil_set_transport: NULL transport or a missing function, not set");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (vittil_sdk.started) {
+        ESP_LOGE(TAG, "vittil_set_transport after vittil_start, not set");
+        return ESP_ERR_INVALID_STATE;
+    }
+    vittil_transport_set_app(t);
+    return ESP_OK;
+#else
+    (void)t;
+    ESP_LOGW(TAG, "vittil_set_transport: CONFIG_VITTIL_TRANSPORT_APP is off, the default transport sends");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
 static void vittil_task(void *arg)
 {
     (void)arg;
@@ -105,14 +127,19 @@ static void start_line(void)
     const char *instead = "its reset reason only";
 #endif
     const char *key = vittil_transport_has_key() ? "key set" : "no key";
+#if CONFIG_VITTIL_TRANSPORT_APP
+    const char *via = " by the application's transport";
+#else
+    const char *via = "";
+#endif
     if (p) {
-        ESP_LOGI(TAG, "start: device %s, fw %s, build %s; server %s, %s; a crash sends its coredump "
+        ESP_LOGI(TAG, "start: device %s, fw %s, build %s; server %s%s, %s; a crash sends its coredump "
                  "(partition %u bytes%s); ping every %d s",
-                 vittil_device_id(), vittil_fw_version(), vittil_build_id(), CONFIG_VITTIL_SERVER_URL, key,
+                 vittil_device_id(), vittil_fw_version(), vittil_build_id(), CONFIG_VITTIL_SERVER_URL, via, key,
                  (unsigned)p->size, fit, CONFIG_VITTIL_PING_INTERVAL_S);
     } else {
-        ESP_LOGI(TAG, "start: device %s, fw %s, build %s; server %s, %s; a crash sends %s (%s); ping every %d s",
-                 vittil_device_id(), vittil_fw_version(), vittil_build_id(), CONFIG_VITTIL_SERVER_URL, key,
+        ESP_LOGI(TAG, "start: device %s, fw %s, build %s; server %s%s, %s; a crash sends %s (%s); ping every %d s",
+                 vittil_device_id(), vittil_fw_version(), vittil_build_id(), CONFIG_VITTIL_SERVER_URL, via, key,
                  instead, why, CONFIG_VITTIL_PING_INTERVAL_S);
     }
     if (!vittil_transport_has_key()) {
@@ -126,6 +153,13 @@ esp_err_t vittil_start(void)
         ESP_LOGE(TAG, "vittil_start called twice");
         return ESP_ERR_INVALID_STATE;
     }
+#if CONFIG_VITTIL_TRANSPORT_APP
+    if (!vittil_transport_app_set()) {
+        ESP_LOGE(TAG, "not started: CONFIG_VITTIL_TRANSPORT_APP is on and no transport is registered "
+                 "(vittil_set_transport before vittil_start); no crash reports from this boot");
+        return ESP_ERR_INVALID_STATE;
+    }
+#endif
     esp_err_t err = vittil_identity_init();
     if (err != ESP_OK) {
         /* the cause logged there; no task, nothing is sent */

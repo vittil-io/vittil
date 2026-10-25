@@ -25,6 +25,36 @@ menu "Vittil"
 
     menu "Advanced"
 
+    choice VITTIL_TRANSPORT
+        prompt "Transport"
+        default VITTIL_TRANSPORT_IDF
+        help
+            How the SDK reaches the server. The default sends through
+            ESP-IDF's HTTP client over https; the application's transport
+            sends through three functions the application registers with
+            vittil_set_transport() before vittil_start(), and ESP-IDF's
+            HTTP client, TLS and root certificate bundle are not linked for
+            the SDK. For an application that already has an HTTP path of
+            its own.
+
+        config VITTIL_TRANSPORT_IDF
+            bool "ESP-IDF's HTTP client over https"
+            help
+                esp_http_client with ESP-IDF's root certificate bundle.
+                An application that already uses it shares the whole
+                stack with the SDK; one that has no https of its own
+                links it for the SDK.
+
+        config VITTIL_TRANSPORT_APP
+            bool "The application's (vittil_set_transport)"
+            help
+                The application registers begin, write and end
+                (vittil_transport_t in vittil.h) before vittil_start(),
+                which refuses to start until it has. The SDK then sends
+                every request through them and links no HTTP client of
+                its own.
+    endchoice
+
     config VITTIL_PING_INTERVAL_S
         int "Ping interval, in seconds"
         range 60 86400
@@ -124,10 +154,11 @@ menu "Vittil"
     config VITTIL_TLS_CERT_BUNDLE
         bool "https: verify the server with ESP-IDF's root certificate bundle" if VITTIL_DEV_OPTIONS
         default y
-        depends on MBEDTLS_CERTIFICATE_BUNDLE
+        depends on MBEDTLS_CERTIFICATE_BUNDLE && VITTIL_TRANSPORT_IDF
         help
             Needed for an https:// server URL. Off only for an http server
-            in a test.
+            in a test. With the application's transport the application
+            verifies the server itself.
 
     config VITTIL_QEMU_ETH
         bool "Emulator transport: bring up QEMU's OpenCores Ethernet (no Wi-Fi in QEMU)" if VITTIL_DEV_OPTIONS
