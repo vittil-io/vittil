@@ -19,7 +19,7 @@ Two parts: add Vittil to your own project, or try the example first.
 1. Add the SDK to your project:
 
    ```
-   idf.py add-dependency "vittil-io/vittil^0.1.3"
+   idf.py add-dependency "vittil-io/vittil^0.1.4"
    ```
 
 2. Add these two lines to the end of `sdkconfig`. Your project key is on
