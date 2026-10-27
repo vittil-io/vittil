@@ -107,13 +107,49 @@ static void ring_put(const char *s, size_t len)
     r->ring_head += len;
 }
 
+/* The byte count of s that ends on a whole UTF-8 character: a sequence a
+ * cut left incomplete at the end is dropped, so a cut line still decodes. */
+static size_t utf8_whole(const char *s, size_t len)
+{
+    size_t i = len, k = 0;
+    while (i > 0 && k < 3 && ((unsigned char)s[i - 1] & 0xC0) == 0x80) {
+        i--;
+        k++;
+    }
+    if (i == 0) {
+        return len;
+    }
+    unsigned char lead = (unsigned char)s[i - 1];
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    return (need == 1 || k + 1 >= need) ? len : i - 1;
+}
+
+/* One line into the ring: at most VITTIL_LOG_LINE_MAX - 1 bytes of it (a
+ * longer line is cut, never inside a UTF-8 character), a newline appended
+ * when it has none, counted. Under the lock: ESP_LOGx is task context only
+ * (ESP_DRAM_LOGx and ESP_EARLY_LOGx bypass the vprintf hook), so the lock
+ * is the task-side spinlock, interrupts off for one copy; the SAFE form
+ * keeps it correct if a line ever comes from an ISR. */
+static void ring_line(const char *line, size_t len)
+{
+    if (len >= VITTIL_LOG_LINE_MAX - 1) {
+        len = utf8_whole(line, VITTIL_LOG_LINE_MAX - 1);
+    }
+    if (len == 0) {
+        return;
+    }
+    portENTER_CRITICAL_SAFE(&vittil_record.mux);
+    ring_put(line, len);
+    if (line[len - 1] != '\n') {
+        ring_put("\n", 1);
+    }
+    vittil_record.rec.ring_lines++;
+    portEXIT_CRITICAL_SAFE(&vittil_record.mux);
+}
+
 /* The hook. Console first, exactly as before vittil was linked in; then the
  * line formatted into VITTIL_LOG_LINE_MAX bytes on this task's stack
- * (a longer line is cut; vsnprintf's return read) and copied into the ring
- * under the lock, a newline appended when the line has none. ESP_LOGx is
- * task context only (ESP_DRAM_LOGx and ESP_EARLY_LOGx bypass the vprintf
- * hook), so the lock is the task-side spinlock, interrupts off for one
- * copy; the SAFE form keeps it correct if a line ever comes from an ISR. */
+ * (vsnprintf's return read) and into the ring. */
 static int vittil_log_vprintf(const char *fmt, va_list ap)
 {
     if (!fmt) {
@@ -128,15 +164,21 @@ static int vittil_log_vprintf(const char *fmt, va_list ap)
     if (n <= 0) {
         return ret;
     }
-    size_t len = (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1;
-    portENTER_CRITICAL_SAFE(&vittil_record.mux);
-    ring_put(line, len);
-    if (line[len - 1] != '\n') {
-        ring_put("\n", 1);
-    }
-    vittil_record.rec.ring_lines++;
-    portEXIT_CRITICAL_SAFE(&vittil_record.mux);
+    ring_line(line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
     return ret;
+}
+
+/* The application's own line (vittil.h): a logger that owns esp_log's
+ * vprintf hook, or prints by another path, hands its lines here so the
+ * tail before a crash is its lines. Nothing is printed; the line goes into
+ * the ring as the hook's would, cut at VITTIL_LOG_LINE_MAX - 1 bytes. Safe
+ * from any task and before vittil_start (the ring is static). */
+void vittil_log_line(const char *line, size_t len)
+{
+    if (!line) {
+        return;
+    }
+    ring_line(line, len);
 }
 
 void vittil_record_init(void)

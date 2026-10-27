@@ -19,7 +19,7 @@ Two parts: add Vittil to your own project, or try the example first.
 1. Add the SDK to your project:
 
    ```
-   idf.py add-dependency "vittil-io/vittil^0.1.4"
+   idf.py add-dependency "vittil-io/vittil^0.1.5"
    ```
 
 2. Add these two lines to the end of `sdkconfig`. Your project key is on
@@ -299,6 +299,29 @@ is under 200 bytes, a coredump's up to the partition's size, written in
 pieces of 3,072 bytes. `vittil_start()` refuses to start until a transport
 is registered. The URL is `https://app.vittil.io/api/...`; the transport
 verifies the server itself.
+
+### Your own logger
+
+The crash's log tail is the last lines of the device's log: the SDK hooks
+ESP-IDF's log output (`esp_log_set_vprintf`) at `vittil_start()`, so every
+`ESP_LOGx` line goes into the tail by itself. A logger that owns that hook
+itself, or prints by its own path (ESPHome's logger, a custom one), hands
+its lines to the SDK, one call per line, and they are the tail:
+
+```c
+#include "vittil.h"
+
+/* Called by your logger with each line it writes. */
+static void my_logger_line(const char *line, size_t len)
+{
+    vittil_log_line(line, len);
+}
+```
+
+Nothing is printed by the call. A line is cut at 159 bytes; the tail holds
+the newest `CONFIG_VITTIL_LOG_RING_BYTES` of what both paths wrote. The
+dashboard reads a line in ESP-IDF's shape, `I (1234) tag: message`, into its
+columns; any other shape is shown as it came.
 
 ## Log lines
 

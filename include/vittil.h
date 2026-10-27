@@ -68,6 +68,16 @@ typedef struct vittil_transport_s {
  * line) until a transport is registered. */
 esp_err_t vittil_set_transport(const vittil_transport_t *t);
 
+/* The application's own log line, into the tail the crash report carries.
+ * ESP_LOGx lines arrive by themselves: the SDK hooks esp_log's vprintf at
+ * vittil_start(). A logger that owns that hook itself, or prints by its
+ * own path (ESPHome's, a custom one), hands its lines here, one call per
+ * line, len bytes of it (a newline is added when the line has none; a
+ * line is cut at 159 bytes). Nothing is printed. Safe from any task;
+ * NULL or an empty line changes nothing. The tail is the newest
+ * CONFIG_VITTIL_LOG_RING_BYTES of what both paths wrote, in order. */
+void vittil_log_line(const char *line, size_t len);
+
 #ifdef __cplusplus
 }
 #endif
