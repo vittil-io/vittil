@@ -28,3 +28,4 @@ files:
     - "**/sdkconfig"
     - "**/sdkconfig.old"
     - "**/dependencies.lock"
+    - "esphome/**"

@@ -12,7 +12,7 @@ line, the task, the registers, the variables and the last log lines.
 
 ## Quickstart
 
-Two parts: add Vittil to your own project, or try the example first.
+Add Vittil to your own project or to an ESPHome device, or try the example first.
 
 ### Add Vittil to your project
 
@@ -70,6 +70,48 @@ Two parts: add Vittil to your own project, or try the example first.
 
 5. Optional, a test crash: call `abort()` once. After the reboot the crash
    is on Issues, decoded.
+
+### Add Vittil to an ESPHome device
+
+For ESPHome on an ESP32 with the esp-idf framework (`esp32: framework:
+type: esp-idf`). Add this to your device's yaml:
+
+```yaml
+external_components:
+  - source: github://vittil-io/vittil
+    components: [vittil]
+
+vittil:
+  project_key: !secret vittil_project_key
+```
+
+and your project key to `secrets.yaml`:
+
+```yaml
+vittil_project_key: "ecr_your_project_key"
+```
+
+Then install the firmware as usual (`esphome run your-device.yaml`). The
+component does the steps above for you: it adds the SDK, keeps crashes in a
+64 KB coredump partition it adds to the partition table, starts Vittil at
+boot and puts ESPHome's own log lines in the crash's log tail. It leaves
+ESPHome's crash handler as it is. The firmware version shown in Vittil is
+your `esphome: project: version`, when you set one.
+
+Optional, a test crash: a button that calls `abort()`.
+
+```yaml
+button:
+  - platform: template
+    name: "Vittil Test Crash"
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_press:
+      - lambda: abort();
+```
+
+The build uploads its ELF as in [ELF upload](#elf-upload), so the crashes
+decode.
 
 ### Try the example
 
