@@ -3,9 +3,15 @@
  *
  * Vittil's own writer, list-driven, kept short: fewer lines in the panic
  * handler are fewer places to crash. The stock panic path
- * reaches its ELF writer through the global symbol esp_core_dump_store();
- * vittil links with -Wl,--wrap=esp_core_dump_store, so that call lands in
- * __wrap_esp_core_dump_store() below. The flash layer (write_init, prepare,
+ * reaches its ELF writer through the global symbol esp_core_dump_store()
+ * (IDF 5.x) or esp_core_dump_write_elf() (IDF 6.0 on); vittil links with
+ * -Wl,--wrap on the one its IDF has (CMakeLists.txt), so that call lands in
+ * __wrap_esp_core_dump_store() below or in its alias
+ * __wrap_esp_core_dump_write_elf(). The image is the same on both but its
+ * flash header: core_dump_header_t is six words on 5.x and three on 6.0
+ * (data_len, version, chip_rev), and the version and the checksum come from
+ * the stock (esp_core_dump_elf_version(), the checksum layer), so the
+ * header below sets only the three words both have. The flash layer (write_init, prepare,
  * start, data, end), the checksum and the Xtensa port (task snapshots, the
  * register dump, the extra info) stay stock and are called through
  * espcoredump's private headers. Read against ESP-IDF v5.5.5
@@ -61,7 +67,8 @@
 
 /* Everything below needs espcoredump's private headers, which are on the
  * include path only when the writer is on (CMakeLists.txt). */
-#if CONFIG_VITTIL_WRITER && CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+/* !DATA_FORMAT_BIN rather than DATA_FORMAT_ELF: IDF 6.0 writes ELF only and has no such option */
+#if CONFIG_VITTIL_WRITER && CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && !CONFIG_ESP_COREDUMP_DATA_FORMAT_BIN
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -892,4 +899,7 @@ esp_err_t __wrap_esp_core_dump_store(void)
     return err;
 }
 
-#endif /* CONFIG_VITTIL_WRITER && ..._ENABLE_TO_FLASH && ..._DATA_FORMAT_ELF */
+/* IDF 6.0 on: the stock calls the writer by its own name (CMakeLists.txt). */
+esp_err_t __wrap_esp_core_dump_write_elf(void) __attribute__((alias("__wrap_esp_core_dump_store")));
+
+#endif /* CONFIG_VITTIL_WRITER && ..._ENABLE_TO_FLASH && !..._DATA_FORMAT_BIN */

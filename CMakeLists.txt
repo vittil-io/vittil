@@ -64,7 +64,11 @@ if(CONFIG_VITTIL_QEMU_ETH AND CONFIG_IDF_TARGET_ESP32C3)
 endif()
 
 # The writer (vittil_writer.c) replaces the stock ELF writer only. The
-# stock panic path calls it through esp_core_dump_store(); the flash layer,
+# stock panic path calls it through esp_core_dump_store() up to IDF 5.x and
+# through esp_core_dump_write_elf() from 6.0 on (6.0 dropped the binary
+# format and the store alias; core_dump_common.c's
+# esp_core_dump_write_elf_and_check() calls the writer by its own name, from
+# another object file, so the wrap reaches it); the flash layer,
 # the checksum and the port stay stock and are reached through espcoredump's
 # private headers. On IDF 5.5.0 esp_core_dump_port.h also includes
 # esp_core_dump_port_impl.h from include_core_dump/port/<arch>; 5.5.5 has
@@ -75,7 +79,11 @@ if(CONFIG_VITTIL_WRITER)
     if(EXISTS "${vittil_coredump_dir}/include_core_dump/port/${vittil_arch}")
         target_include_directories(${COMPONENT_LIB} PRIVATE "${vittil_coredump_dir}/include_core_dump/port/${vittil_arch}")
     endif()
-    target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_core_dump_store")
+    if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_core_dump_write_elf")
+    else()
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_core_dump_store")
+    endif()
 endif()
 
 # The ELF upload after the link (CONFIG_VITTIL_ELF_UPLOAD): tools/elf_upload.py

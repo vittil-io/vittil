@@ -78,7 +78,8 @@ menu "Vittil"
     config VITTIL_WRITER
         bool "Fit the dump to the coredump partition instead of writing nothing"
         default y
-        depends on ESP_COREDUMP_ENABLE_TO_FLASH && ESP_COREDUMP_DATA_FORMAT_ELF
+        # not "DATA_FORMAT_ELF": IDF 6.0 has ELF as its only format and no such option
+        depends on ESP_COREDUMP_ENABLE_TO_FLASH && !ESP_COREDUMP_DATA_FORMAT_BIN
         help
             The stock writer writes no dump at all when it is larger than the
             coredump partition. With this on, vittil's writer (the stock ELF
