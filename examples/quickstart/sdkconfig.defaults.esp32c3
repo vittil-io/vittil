@@ -1,0 +1,3 @@
+# A Wi-Fi app with https outgrows the default 1 MB app partition on this chip:
+# the single-app table with a 1.5 MB app and the coredump partition (2 MB flash or more).
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
