@@ -18,6 +18,7 @@
  * processor status. Every function checks what it is given; every string
  * copy is bounded; nothing is allocated.
  */
+#include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -124,13 +125,18 @@ static size_t utf8_whole(const char *s, size_t len)
     return (need == 1 || k + 1 >= need) ? len : i - 1;
 }
 
-/* One line into the ring: at most VITTIL_LOG_LINE_MAX - 1 bytes of it (a
- * longer line is cut, never inside a UTF-8 character), a newline appended
- * when it has none, counted. Under the lock: ESP_LOGx is task context only
- * (ESP_DRAM_LOGx and ESP_EARLY_LOGx bypass the vprintf hook), so the lock
- * is the task-side spinlock, interrupts off for one copy; the SAFE form
- * keeps it correct if a line ever comes from an ISR. */
-static void ring_line(const char *line, size_t len)
+/* Into the ring: at most VITTIL_LOG_LINE_MAX - 1 bytes of the piece (a
+ * longer one is cut, never inside a UTF-8 character). A piece that ends in
+ * a newline completes a line, counted. One that does not is kept open when
+ * `whole` is false (the vprintf hook: ESP-IDF's log v2 prints one line as
+ * three calls, the prefix, the message and the newline, log v1 as one call
+ * ending in the newline, so the ring joins what the console joins) and
+ * closed with a newline when `whole` is true (vittil_log_line: one call is
+ * one line). Under the lock: ESP_LOGx is task context only (ESP_DRAM_LOGx
+ * and ESP_EARLY_LOGx bypass the vprintf hook), so the lock is the task-side
+ * spinlock, interrupts off for one copy; the SAFE form keeps it correct if
+ * a line ever comes from an ISR. */
+static void ring_line(const char *line, size_t len, bool whole)
 {
     if (len >= VITTIL_LOG_LINE_MAX - 1) {
         len = utf8_whole(line, VITTIL_LOG_LINE_MAX - 1);
@@ -140,10 +146,12 @@ static void ring_line(const char *line, size_t len)
     }
     portENTER_CRITICAL_SAFE(&vittil_record.mux);
     ring_put(line, len);
-    if (line[len - 1] != '\n') {
+    if (line[len - 1] == '\n') {
+        vittil_record.rec.ring_lines++;
+    } else if (whole) {
         ring_put("\n", 1);
+        vittil_record.rec.ring_lines++;
     }
-    vittil_record.rec.ring_lines++;
     portEXIT_CRITICAL_SAFE(&vittil_record.mux);
 }
 
@@ -164,7 +172,7 @@ static int vittil_log_vprintf(const char *fmt, va_list ap)
     if (n <= 0) {
         return ret;
     }
-    ring_line(line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
+    ring_line(line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1, false);
     return ret;
 }
 
@@ -178,7 +186,7 @@ void vittil_log_line(const char *line, size_t len)
     if (!line) {
         return;
     }
-    ring_line(line, len);
+    ring_line(line, len, true);
 }
 
 void vittil_record_init(void)
